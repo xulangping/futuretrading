@@ -377,7 +377,7 @@ class BacktestRunnerV8:
                         
                         # 在策略中存储strike、expiry和期权价格信息
                         option_price = signal.spot if signal.spot else 0.0
-                        self.strategy.store_position_metadata(signal.symbol, strike, expiry, option_price)
+                        self.strategy.store_position_metadata(signal.symbol, strike, expiry, option_price, signal.event_time_et)
                         
                         # 更新策略状态
                         self.strategy.daily_trade_count += 1

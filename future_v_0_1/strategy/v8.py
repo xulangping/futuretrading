@@ -6,14 +6,16 @@ V8 事件驱动期权流动量策略 - 简化版本（直接买入 + 固定仓�
 - 入场：直接买入，无复杂过滤
 - 仓位：固定20%
 - 出场优先级：
-  1. 达到expiry日期 + 10:00 AM 卖出
-  2. 达到strike价格 卖出
-  3. 止盈+20% 卖出
-  4. 止损-10% 卖出
+  1. 达到strike价格 卖出
+  2. 定时出场（如配置max_holding_days）
+  3. 达到expiry日期 + 10:00 AM 卖出
+  4. 追踪止损（从最高价下跌）
+  5. 止损-10% 卖出
+  6. 止盈+20% 卖出
 """
 
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Dict
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -86,6 +88,7 @@ class StrategyV8(StrategyBase):
         self.take_profit = strategy_cfg.get('take_profit', 0.20)  # 止盈 +20%
         self.exit_time = strategy_cfg.get('exit_time', '10:00:00')  # 定时退出时间（expiry日10:00）
         self.trailing_stop_loss = strategy_cfg.get('trailing_stop_loss', 0.05) # 追踪止损 -5%
+        self.max_holding_days = strategy_cfg.get('max_holding_days', None)  # 最大持有天数，None表示不启用
         
         # === 运行时状态 ===
         self.daily_trade_count = 0
@@ -96,13 +99,14 @@ class StrategyV8(StrategyBase):
         time_ranges_str = ', '.join([f"{r[0]}-{r[1]}" for r in self.trade_time_ranges]) if self.trade_time_ranges else '全天'
         premium_str = f"${self.premium_min:,.0f}-${self.premium_max:,.0f}" if self.premium_max < 999999999 else f">${self.premium_min:,.0f}"
         macd_str = f"MACD过滤启用 (threshold={self.macd_threshold})" if self.macd_enabled else "MACD过滤禁用"
+        holding_days_str = f"{self.max_holding_days}天" if self.max_holding_days else "禁用"
         
         self.logger.info(
             f"StrategyV8 初始化完成:\n"
             f"  入场: 时间={time_ranges_str}, DTE={self.dte_min}-{self.dte_max}天, OTM={self.otm_min:.1f}-{self.otm_max:.1f}%, Premium={premium_str}\n"
             f"  MACD: {macd_str}\n"
             f"  仓位: 固定{self.fixed_position_ratio:.0%}, 日限<={self.max_daily_position:.0%}\n"
-            f"  出场: strike/expiry(10:00)/止盈{self.take_profit:+.0%}/止损{self.stop_loss:+.0%}"
+            f"  出场: strike/定时({holding_days_str})/expiry(10:00)/止盈{self.take_profit:+.0%}/止损{self.stop_loss:+.0%}"
         )
 
     def on_start(self):
@@ -136,7 +140,6 @@ class StrategyV8(StrategyBase):
             ValueError: 如果无法找到足够多的交易日
         """
         # 获取从target_date向前200天的所有交易日（足够了）
-        from datetime import timedelta
         search_start = target_date - timedelta(days=300)  # 向前查找300天，足以找到21个交易日
         
         valid_days = self.market_calendar.valid_days(start_date=search_start, end_date=target_date)
@@ -320,8 +323,6 @@ class StrategyV8(StrategyBase):
         
         # ===== 6. 价格趋势过滤（对比-1天 vs -21天收盘价）=====
         if self.price_trend_enabled:
-            from datetime import timedelta
-            
             signal_date = ev.event_time_et.date()
             
             # 获取-1交易日收盘价
@@ -483,10 +484,13 @@ class StrategyV8(StrategyBase):
         检查持仓，生成平仓决策
         
         出场优先级：
-        1. 达到expiry日期 + 10:00 AM 卖出
-        2. 达到strike价格 卖出
-        3. 止盈+20% 卖出
+        1. 达到strike价格 卖出
+        2. 定时出场（如配置max_holding_days，替代expiry出场）或 expiry日期 + 10:00 AM 卖出
+        3. 追踪止损（从最高价下跌）
         4. 止损-10% 卖出
+        5. 止盈+20% 卖出
+        
+        注意：max_holding_days和expiry是互斥的，配置了max_holding_days就不再使用expiry
         """
         if not market_client:
             self.logger.error("市场数据客户端未提供，无法检查持仓")
@@ -561,10 +565,43 @@ class StrategyV8(StrategyBase):
                             del self.highest_price_map[symbol]
                         continue
             
-            # ===== 2. 检查expiry日期出场 =====
+            # ===== 2. 检查定时/expiry日期出场 =====
+            # 如果配置了max_holding_days，使用定时出场；否则使用expiry出场
             if symbol in self.position_metadata:
                 meta = self.position_metadata[symbol]
-                if 'expiry' in meta:
+                
+                # 优先使用max_holding_days定时出场
+                if self.max_holding_days and 'entry_time' in meta and meta['entry_time']:
+                    entry_time = meta['entry_time']
+                    entry_date = entry_time.date()
+                    current_date = current_et.date()
+                    
+                    # 计算持有天数（自然日）
+                    holding_days = (current_date - entry_date).days
+                    
+                    # 达到指定天数 + 10:00 AM 才卖出
+                    if holding_days >= self.max_holding_days and current_et.time() >= exit_time_today:
+                        self.logger.info(
+                            f"✓ 平仓决策[定时出场]: {symbol} {can_sell_qty}股 @${current_price:.2f} "
+                            f"(成本${cost_price:.2f}, 持有{holding_days}天≥{self.max_holding_days}天, 盈亏{pnl_ratio:+.1%})"
+                        )
+                        exit_decisions.append(ExitDecision(
+                            symbol=symbol,
+                            shares=can_sell_qty,
+                            price_limit=current_price,
+                            reason='max_holding_days',
+                            client_id=f"{symbol}_HD_{current_et.strftime('%Y%m%d%H%M%S')}",
+                            meta={'pnl_ratio': pnl_ratio, 'holding_days': holding_days, 'entry_date': entry_date.isoformat()}
+                        ))
+                        # 清除元数据
+                        if symbol in self.position_metadata:
+                            del self.position_metadata[symbol]
+                        if symbol in self.highest_price_map:
+                            del self.highest_price_map[symbol]
+                        continue
+                
+                # 如果没有配置max_holding_days，使用expiry日期出场
+                elif 'expiry' in meta:
                     expiry_date = meta['expiry']
                     current_date = current_et.date()
                     
@@ -588,7 +625,7 @@ class StrategyV8(StrategyBase):
                             del self.highest_price_map[symbol]
                         continue
             
-            # ===== 3. 检查动态止损（从最高价下跌） =====
+            # ===== 4. 检查动态止损（从最高价下跌） =====
             if self.trailing_stop_loss > 0 and symbol in self.highest_price_map:
                 highest_price = self.highest_price_map[symbol]
                 trailing_stop_price = highest_price * (1 - self.trailing_stop_loss)
@@ -614,7 +651,7 @@ class StrategyV8(StrategyBase):
                         del self.highest_price_map[symbol]
                     continue
             
-            # ===== 4. 检查止损 =====
+            # ===== 5. 检查止损 =====
             stop_loss_price = cost_price * (1 - self.stop_loss)
             if current_price <= stop_loss_price:
                 self.logger.info(
@@ -636,7 +673,7 @@ class StrategyV8(StrategyBase):
                     del self.highest_price_map[symbol]
                 continue
             
-            # ===== 5. 检查止盈 =====
+            # ===== 6. 检查止盈 =====
             take_profit_price = cost_price * (1 + self.take_profit)
             if current_price >= take_profit_price:
                 self.logger.info(
@@ -660,12 +697,13 @@ class StrategyV8(StrategyBase):
         
         return exit_decisions
 
-    def store_position_metadata(self, symbol: str, strike: float, expiry: date, option_price: float = None):
+    def store_position_metadata(self, symbol: str, strike: float, expiry: date, option_price: float = None, entry_time: datetime = None):
         """存储持仓的strike、expiry和期权价格信息（由回测器调用）"""
         self.position_metadata[symbol] = {
             'strike': strike,
             'expiry': expiry,
-            'option_price': option_price  # spot from signal (option ask price)
+            'option_price': option_price,  # spot from signal (option ask price)
+            'entry_time': entry_time  # 买入时间，用于定时出场
         }
 
     def on_order_filled(self, res):

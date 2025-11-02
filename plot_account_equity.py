@@ -9,7 +9,7 @@ Usage:
     2. Run: python plot_account_equity.py
     
 Example:
-    BACKTEST_FILE = 'backtest_v8_10.json'
+    BACKTEST_FILE = 'backtest_v8_21.json'
 """
 
 import pandas as pd
@@ -32,7 +32,7 @@ from market.backtest_client import BacktestMarketClient
 # ============================================================================
 
 # 回测结果文件路径（仅支持.json格式）
-BACKTEST_FILE = 'backtest_v8_20.json'
+BACKTEST_FILE = 'backtest_v8_26.json'
 
 # 初始资金（如果从JSON读取则会自动使用JSON中的值）
 INITIAL_CAPITAL = 1000000
