@@ -35,11 +35,11 @@ strategy:
     
     # DTE过滤（天数）
     dte_min: 0          # 最小DTE，过滤<8天(0-7天)的短期期权
-    dte_max: 365     # 最大DTE，设大一点不限制（或设60/90）
+    dte_max: 90     # 最大DTE，设大一点不限制（或设60/90）
     
     # OTM率过滤（百分比）
-    otm_max: 15     # 最大OTM率，过滤>25%的高虚值期权
-    otm_min: 0        # 最小OTM率（0表示不限制）
+    otm_max: 20     # 最大OTM率，过滤>25%的高虚值期权
+    otm_min: 5        # 最小OTM率（0表示不限制）
     
     # Premium过滤（美元）
     premium_max: 50000000  # 最大Premium，过滤>2M的超大流动性期权（6笔，胜率33%）
@@ -64,17 +64,19 @@ strategy:
   # ===== 仓位管理 =====
   position_compute:
     # V8固定仓位：每笔交易都是总资产的24%
-    fixed_position_ratio: 0.12
+    fixed_position_ratio: 0.2
     # 每日总仓位上限：99%（最多可以有4笔24%的仓位）
     max_daily_position: 0.99
   
   # ===== 出场条件 =====
-  stop_loss: 0.1      # 固定止损 -10%
-  take_profit: 0.4    # 止盈 +20%
+  stop_loss: 0.05      # 固定止损 -10%
+  take_profit: 0.25    # 止盈 +20%
   trailing_stop_loss: 0.3 # 追踪止损 -10%
-  
+  max_holding_days: 30
+
   # expiry日期的出场时间（美东时间）
   exit_time: '10:00:00'  # 到期日早上10:00卖出
+
   
   # ===== 杠杆配置 =====
   leverage:

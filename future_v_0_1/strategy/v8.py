@@ -16,6 +16,7 @@ V8 事件驱动期权流动量策略 - 简化版本（直接买入 + 固定仓�
 
 import logging
 from datetime import date, datetime, time, timedelta
+from re import S
 from typing import Dict
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -25,6 +26,7 @@ try:
 except ImportError:
     from strategy import StrategyBase, StrategyContext, EntryDecision, ExitDecision
 
+from numpy.ma import minimum_fill_value
 import pandas_market_calendars as mcal
 
 
@@ -544,8 +546,8 @@ class StrategyV8(StrategyBase):
                 meta = self.position_metadata[symbol]
                 if 'strike' in meta:
                     strike_price = meta['strike']
-                    
-                    if current_price >= strike_price:
+                    out_price = max(strike_price, cost_price * (1 + self.take_profit))
+                    if current_price >= out_price:
                         self.logger.info(
                             f"✓ 平仓决策[达到strike]: {symbol} {can_sell_qty}股 @${current_price:.2f} "
                             f"(成本${cost_price:.2f}, Strike=${strike_price:.2f}, 盈亏{pnl_ratio:+.1%})"
@@ -652,11 +654,11 @@ class StrategyV8(StrategyBase):
                     continue
             
             # ===== 5. 检查止损 =====
-            stop_loss_price = cost_price * (1 - self.stop_loss)
+            stop_loss_price = min(cost_price * (1 - self.stop_loss), cost_price - (strike_price - cost_price) * 0.5)
             if current_price <= stop_loss_price:
                 self.logger.info(
                     f"✓ 平仓决策[止损]: {symbol} {can_sell_qty}股 @${current_price:.2f} "
-                    f"(成本${cost_price:.2f}, 止损价${stop_loss_price:.2f}, 亏损{pnl_ratio:.1%})"
+                    f"(成本${cost_price:.2f}, 目标价${strike_price:.2f}, 止损价${stop_loss_price:.2f}, 亏损{pnl_ratio:.1%})"
                 )
                 exit_decisions.append(ExitDecision(
                     symbol=symbol,
@@ -673,27 +675,6 @@ class StrategyV8(StrategyBase):
                     del self.highest_price_map[symbol]
                 continue
             
-            # ===== 6. 检查止盈 =====
-            take_profit_price = cost_price * (1 + self.take_profit)
-            if current_price >= take_profit_price:
-                self.logger.info(
-                    f"✓ 平仓决策[止盈]: {symbol} {can_sell_qty}股 @${current_price:.2f} "
-                    f"(成本${cost_price:.2f}, 止盈价${take_profit_price:.2f}, 盈利{pnl_ratio:.1%})"
-                )
-                exit_decisions.append(ExitDecision(
-                    symbol=symbol,
-                    shares=can_sell_qty,
-                    price_limit=current_price,
-                    reason='take_profit',
-                    client_id=f"{symbol}_TP_{current_et.strftime('%Y%m%d%H%M%S')}",
-                    meta={'pnl_ratio': pnl_ratio, 'take_profit_price': take_profit_price}
-                ))
-                # 清除元数据和最高价
-                if symbol in self.position_metadata:
-                    del self.position_metadata[symbol]
-                if symbol in self.highest_price_map:
-                    del self.highest_price_map[symbol]
-                continue
         
         return exit_decisions
 
