@@ -34,11 +34,11 @@ from market.backtest_client import BacktestMarketClient
 # 回测结果文件路径（仅支持.json格式）
 BACKTEST_FILE = 'backtest_v8_best.json'
 
-# 初始资金（如果从JSON读取则会自动使用JSON中的值）
+# 初始资金（如果从JSON读取则会自动使用JSON中的值）image.png
 INITIAL_CAPITAL = 1000000
 
 # 无风险利率（年化）
-RISK_FREE_RATE = 0.03
+RISK_FREE_RATE = 0.02
 
 # SPY和QQQ历史数据文件（使用数据库目录下的文件）
 SPY_DATA_FILE = 'future_v_0_1/database/spy_historical_data.csv'
