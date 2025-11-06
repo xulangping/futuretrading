@@ -38,7 +38,7 @@ BACKTEST_FILE = 'backtest_v8_best.json'
 INITIAL_CAPITAL = 1000000
 
 # 无风险利率（年化）
-RISK_FREE_RATE = 0.02
+RISK_FREE_RATE = 0.03
 
 # SPY和QQQ历史数据文件（使用数据库目录下的文件）
 SPY_DATA_FILE = 'future_v_0_1/database/spy_historical_data.csv'
