@@ -20,7 +20,7 @@ logging:
 
 # V8策略配置
 strategy:
-  name: 'v_best_175'
+  name: 'v8'
   
   # ===== 入场过滤条件 =====
   filter:
