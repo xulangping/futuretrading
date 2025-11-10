@@ -330,23 +330,30 @@ class BacktestRunnerV8:
                 for exit_dec in exit_decisions:
                     self._execute_sell(exit_dec, current_time)
             
-            # 2. 收集当前时间需要预加载的新符号（动态加载）
-            if current_time in signals_by_time:
-                for sig_data in signals_by_time[current_time]:
-                    symbol = sig_data['signal'].symbol
-                    # 检查是否需要预加载：不在prefetch_ranges中，或虽然在prefetched_symbols中但缓存已被清空
-                    if symbol not in self.market_client.prefetch_ranges:
-                        self.logger.info(f"📦 预加载 {symbol} 的6天数据...")
-                        self.market_client.prefetch_multiple_days(symbol, current_time.date(), days=6)
-                        prefetched_symbols.add(symbol)
-            
-            # 3. 处理所有信号
+            # 2. 处理当前时间的信号（先做快速过滤，再加载价格）
             if current_time in signals_by_time:
                 for sig_data in signals_by_time[current_time]:
                     signal = sig_data['signal']
                     strike = sig_data['strike']
                     expiry = sig_data['expiry']
                     symbol = signal.symbol
+                    
+                    # 先做不需要价格的快速过滤
+                    if not self.strategy._quick_filter(signal):
+                        self.signal_records.append({
+                            'symbol': signal.symbol,
+                            'time': signal.event_time_et,
+                            'decision': 'FILTERED',
+                            'strike': strike,
+                            'expiry': expiry.isoformat()
+                        })
+                        continue
+                    
+                    # 快速过滤通过后，再预加载价格数据
+                    if symbol not in self.market_client.prefetch_ranges:
+                        self.logger.info(f"📦 预加载 {symbol} 的6天数据...")
+                        self.market_client.prefetch_multiple_days(symbol, current_time.date(), days=6)
+                        prefetched_symbols.add(symbol)
                     
                     # 调试：打印前5个信号的时间
                     if not hasattr(self, '_signal_debug_count'):
@@ -355,7 +362,7 @@ class BacktestRunnerV8:
                         self.logger.info(f"[DEBUG] 处理{symbol}信号: current_time={current_time.strftime('%Y-%m-%d %H:%M:%S')}, signal.event_time_et={signal.event_time_et.strftime('%Y-%m-%d %H:%M:%S')}")
                         self._signal_debug_count += 1
                     
-                    # 策略判断（V8无复杂过滤）
+                    # 完整策略判断（需要价格数据）
                     decision = self.strategy.on_signal(signal, self.market_client)
                     
                     if decision:

@@ -127,6 +127,99 @@ class StrategyV8(StrategyBase):
         """交易日收盘"""
         self.logger.info(f"交易日收盘: {trading_date_et}")
 
+    def _quick_filter(self, ev) -> bool:
+        """
+        快速过滤：只做不需要实时价格的检查
+        这样可以避免为明显不合格的信号加载价格数据
+        
+        Args:
+            ev: SignalEvent
+            
+        Returns:
+            True: 通过快速过滤，需要进一步检查
+            False: 被过滤，无需加载价格
+        """
+        # ===== 1. 时间窗口过滤 =====
+        current_time = ev.event_time_et.time()
+        
+        # 检查是否在配置的时间窗口内
+        if self.trade_time_ranges:
+            in_time_range = False
+            for time_range in self.trade_time_ranges:
+                start_time = datetime.strptime(time_range[0], '%H:%M:%S').time()
+                end_time = datetime.strptime(time_range[1], '%H:%M:%S').time()
+                if start_time <= current_time <= end_time:
+                    in_time_range = True
+                    break
+            
+            if not in_time_range:
+                self.logger.info(f"过滤[时间窗口]: {ev.symbol} 不在交易时段 {current_time}")
+                return False
+        
+        # 检查距离收盘时间
+        market_close = time(15, 59, 0)
+        if current_time >= market_close:
+            self.logger.info(f"过滤[接近收盘]: {ev.symbol} 时间={current_time}")
+            return False
+        
+        # ===== 2. DTE过滤 =====
+        if hasattr(ev, 'expiry') and ev.expiry:
+            current_date = ev.event_time_et.date()
+            expiry_date = ev.expiry
+            dte = (expiry_date - current_date).days
+            
+            if dte < self.dte_min:
+                self.logger.info(f"过滤[DTE过短]: {ev.symbol} DTE={dte}天 < {self.dte_min}天")
+                return False
+            
+            if dte > self.dte_max:
+                self.logger.info(f"过滤[DTE过长]: {ev.symbol} DTE={dte}天 > {self.dte_max}天")
+                return False
+        
+        # ===== 3. OTM过滤（使用signal中的stock_price）=====
+        if hasattr(ev, 'strike') and hasattr(ev, 'stock_price') and ev.stock_price > 0:
+            strike_price = ev.strike
+            stock_price = ev.stock_price
+            otm_pct = ((strike_price - stock_price) / stock_price) * 100
+            
+            if otm_pct > self.otm_max:
+                self.logger.info(
+                    f"过滤[OTM过高]: {ev.symbol} OTM={otm_pct:.2f}% > {self.otm_max}% "
+                    f"(Strike=${strike_price:.2f}, SignalPrice=${stock_price:.2f})"
+                )
+                return False
+            
+            if otm_pct < self.otm_min:
+                self.logger.info(
+                    f"过滤[OTM过低]: {ev.symbol} OTM={otm_pct:.2f}% < {self.otm_min}%"
+                )
+                return False
+        
+        # ===== 4. Premium过滤 =====
+        if hasattr(ev, 'premium_usd') and ev.premium_usd > 0:
+            if ev.premium_usd > self.premium_max:
+                self.logger.info(
+                    f"过滤[Premium过大]: {ev.symbol} Premium=${ev.premium_usd:,.0f} > ${self.premium_max:,.0f}"
+                )
+                return False
+            
+            if ev.premium_usd < self.premium_min:
+                self.logger.info(
+                    f"过滤[Premium过小]: {ev.symbol} Premium=${ev.premium_usd:,.0f} < ${self.premium_min:,.0f}"
+                )
+                return False
+        
+        # ===== 5. Earnings过滤 =====
+        if self.earnings_enabled and hasattr(ev, 'earnings') and ev.earnings is not None:
+            if ev.earnings > self.earnings_max:
+                self.logger.info(
+                    f"过滤[Earnings]: {ev.symbol} 距离Earnings={ev.earnings}天 > {self.earnings_max}天"
+                )
+                return False
+        
+        # 通过所有快速过滤
+        return True
+    
     def _get_trading_day_before(self, target_date: date, num_trading_days: int) -> date:
         """
         计算target_date之前第num_trading_days个交易日
@@ -603,7 +696,7 @@ class StrategyV8(StrategyBase):
                         continue
                 
                 # 如果没有配置max_holding_days，使用expiry日期出场
-                elif 'expiry' in meta:
+                if 'expiry' in meta:
                     expiry_date = meta['expiry']
                     current_date = current_et.date()
                     

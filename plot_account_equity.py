@@ -32,7 +32,7 @@ from market.backtest_client import BacktestMarketClient
 # ============================================================================
 
 # 回测结果文件路径（仅支持.json格式）
-BACKTEST_FILE = 'backtest_v8_best.json'
+BACKTEST_FILE = 'exp_result/backtest_v1108_1.json'
 
 # 初始资金（如果从JSON读取则会自动使用JSON中的值）image.png
 INITIAL_CAPITAL = 1000000
