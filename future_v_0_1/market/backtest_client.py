@@ -165,12 +165,35 @@ class BacktestMarketClient:
             if len(df) == 0:
                 return None
             
-            # Check if we have data for the start_date (important!)
-            # If start_date is not in cache, we should fetch from API
+            # Check if we have data for all required trading days
+            # Get NYSE trading days in the requested range
             dates_in_cache = set(df['date'].unique())
-            if start_str not in dates_in_cache:
-                self.logger.debug(f"缓存中没有 {symbol} 在 {start_str} 的数据，需要从 API 获取")
-                return None
+            
+            try:
+                nyse = mcal.get_calendar('NYSE')
+                trading_days = nyse.valid_days(start_date=start_str, end_date=end_str)
+                expected_trading_days = set(pd.to_datetime(trading_days).date.astype(str))
+                
+                # Find missing trading days
+                missing_days = expected_trading_days - dates_in_cache
+                
+                if missing_days:
+                    self.logger.info(f"缓存中缺少 {symbol} 的 {len(missing_days)} 个交易日，将从 API 补充: {sorted(list(missing_days))[:3]}...")
+                    # Return None to trigger full API fetch which will merge with existing cache
+                    # The _save_to_local_cache will handle merging new data with existing cache
+                    return None
+                
+                # All required trading days are in cache
+                # No need to check non-trading days (weekends/holidays)
+                
+            except Exception as e:
+                # If calendar check fails, fall back to basic validation
+                self.logger.debug(f"无法检查交易日历: {e}，使用基本验证")
+                
+                # At minimum, check if start_date is in cache
+                if start_str not in dates_in_cache:
+                    self.logger.debug(f"缓存中没有 {symbol} 在 {start_str} 的数据，需要从 API 获取")
+                    return None
             
             # Ensure datetime column has correct timezone (already stored with ET timezone)
             if df['datetime'].dt.tz is None:
