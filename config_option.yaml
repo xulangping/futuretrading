@@ -1,0 +1,264 @@
+# Option Selling Backtest Configuration
+# 期权卖出回测配置文件
+
+# ============================================================
+# 回测基础设置
+# ============================================================
+backtest:
+  initial_cash: 1000000.0  # 初始资金（美元）
+  start_date: "2024-01-01"  # 回测开始日期 (YYYY-MM-DD)，null = CSV最早日期
+  end_date: "2025-10-01"    # 回测结束日期 (YYYY-MM-DD)，null = CSV最晚日期
+  
+  # 持仓管理
+  hold_days: 5              # 持仓天数（默认5天后平仓）
+  max_positions: 20         # 最大同时持仓数
+  
+  # 交易延迟（模拟真实交易场景）
+  signal_delay_minutes: 10  # 信号延迟（分钟），默认10分钟
+
+
+# ============================================================
+# 交易成本配置
+# ============================================================
+costs:
+  slippage: 0.01                  # 滑点（1% = 0.01）
+  commission_per_contract: 0.65   # 每张合约佣金（美元）
+  min_commission: 1.0             # 最低佣金（美元）
+
+
+# ============================================================
+# 期权信号筛选条件
+# ============================================================
+filters:
+  # 基础筛选
+  option_type:                # 期权类型
+    - "call"                  # call = 看涨期权
+    # - "put"                 # put = 看跌期权（取消注释以启用）
+  
+  side:                       # 交易方向
+    - "ASK"                   # ASK = 买方主动（通常更看涨）
+    # - "BID"                 # BID = 卖方主动
+  
+  # 权利金筛选（Premium）
+  premium:
+    min: 100000                # 最小权利金（美元），过滤小单
+    max: 10000000             # 最大权利金（美元）
+  
+  # 期权价格筛选（Spot Price）
+  spot:
+    min: 0.20                 # 最小期权价格（美元/合约）
+    max: 20.0                 # 最大期权价格（美元/合约）
+  
+  # 股票价格筛选（Stock Price）
+  stock_price:
+    min: 5.0                  # 最小股票价格（美元）
+    max: 1000.0               # 最大股票价格（美元）
+  
+  # 行权价筛选（Strike）
+  strike:
+    min: 1.0                  # 最小行权价
+    max: 5000.0               # 最大行权价
+  
+  # 价外程度筛选（OTM Percentage）
+  otm_pct:
+    min: 0.0                  # 最小价外百分比（0% = 平价）
+    max: 50.0                 # 最大价外百分比（50% = 深度价外）
+  
+  # 到期时间筛选（Days to Expiry - DTE）
+  dte:
+    min: 7                    # 最少到期天数（过滤即将到期的期权）
+    max: 180                  # 最多到期天数（过滤太远期的期权）
+  
+  # 交易量筛选（Volume）
+  volume:
+    min: 100                  # 最小成交量（确保流动性）
+    max: null                 # 最大成交量（null = 不限制）
+  
+  # 持仓量筛选（Open Interest - OI）
+  open_interest:
+    min: 10                   # 最小持仓量（降低以获得更多信号）
+    max: null                 # 最大持仓量
+  
+  # 隐含波动率筛选（IV Percentage）
+  iv_pct:
+    min: 20.0                 # 最小IV（%）
+    max: 200.0                # 最大IV（%），过滤异常高波动
+  
+  # Greeks 筛选
+  delta:
+    min: 0.10                 # 最小Delta（期权价格对股票价格的敏感度）
+    max: 0.90                 # 最大Delta
+  
+  theta:
+    min: -10.0                # 最小Theta（时间衰减），负值表示每天损失
+    max: 0.0                  # 最大Theta
+  
+  gamma:
+    min: 0.0                  # 最小Gamma（Delta的变化率）
+    max: 1.0                  # 最大Gamma
+  
+  vega:
+    min: 0.0                  # 最小Vega（对波动率的敏感度）
+    max: 1.0                  # 最大Vega
+  
+  # 财报筛选（Earnings Days）
+  earnings:
+    min_days_to_earnings: 5   # 距离财报最少天数（避免财报前卖出期权）
+    max_days_to_earnings: null  # 距离财报最多天数
+  
+  # 行业筛选（Sector）
+  sectors:                    # 允许的行业（null = 全部允许）
+    # - "Technology"
+    # - "Healthcare"
+    # - "Financial Services"
+    # - "Consumer Cyclical"
+    # - "Energy"
+    # - "Industrials"
+    # - "Basic Materials"
+    # - "Real Estate"
+    # - "Communication Services"
+    # - "Utilities"
+    # - "Consumer Defensive"
+  
+  # 特定股票筛选
+  symbols:
+    whitelist: null           # 白名单（null = 全部允许）
+      # - "SPY"
+      # - "QQQ"
+      # - "AAPL"
+    blacklist: null           # 黑名单（这些股票不交易）
+      # - "TSLA"
+  
+  # 规则筛选（Rule from CSV）
+  rules:                      # 允许的交易规则类型
+    # - "Sweeps Followed By Floor"
+    # - "Floor Trade Large Cap"
+    # - "Low Historic Volume Floor"
+    # - "Repeated Hits"
+
+
+# ============================================================
+# 仓位管理
+# ============================================================
+position_sizing:
+  method: "fixed"             # 仓位计算方法: "fixed" | "risk_based" | "kelly"
+  
+  # 固定仓位（method = "fixed"）
+  fixed:
+    contracts_per_trade: 1    # 每次交易固定合约数
+  
+  # 基于风险的仓位（method = "risk_based"）
+  risk_based:
+    risk_per_trade_pct: 2.0   # 每次交易风险占总资产的百分比
+    max_risk_per_trade: 5000  # 每次交易最大风险金额（美元）
+  
+  # Kelly准则仓位（method = "kelly"）
+  kelly:
+    win_rate: 0.65            # 历史胜率
+    avg_win: 100              # 平均盈利
+    avg_loss: 150             # 平均亏损
+    kelly_fraction: 0.25      # Kelly比例（0.25 = 使用25%的Kelly建议）
+
+
+# ============================================================
+# 止盈止损设置
+# ============================================================
+exit_rules:
+  # 时间止损
+  time_based:
+    enabled: true
+    hold_days: 5              # 持有N天后平仓（与backtest.hold_days一致）
+  
+  # 收益止盈
+  profit_target:
+    enabled: true
+    target_pct: 50.0          # 收益达到50%时止盈（基于权利金）
+  
+  # 止损
+  stop_loss:
+    enabled: true
+    loss_pct: 20.0           # 亏损达到100%时止损（期权价格翻倍）
+  
+  # Delta止损（期权接近实值）
+  delta_stop:
+    enabled: false
+    delta_threshold: 0.70     # Delta超过0.70时平仓（太接近实值）
+  
+  # 到期日止损
+  expiry_based:
+    enabled: true
+    days_before_expiry: 1     # 到期前N天强制平仓
+
+
+# ============================================================
+# 数据和缓存配置
+# ============================================================
+data:
+  csv_file: "future_v_0_1/database/merged_strategy_v1_calls_bell_2023M3_2025M10.csv"
+  cache_dir: "future_v_0_1/database/option_cache"  # 期权价格缓存目录
+  timezone: "Asia/Shanghai"   # CSV时间时区（中国时间）
+
+
+# ============================================================
+# API 配置（Polygon.io）
+# ============================================================
+api:
+  provider: "polygon"         # API提供商
+  plan: "paid"                # "free" | "paid" (付费版可以更激进地使用)
+  
+  # 并发请求设置（付费版可以提高）
+  concurrent:
+    enabled: true             # 是否启用并发请求
+    max_workers: 10           # 最大并发线程数（付费版建议5-20）
+  
+  # 请求限速（付费版通常无限制）
+  rate_limit:
+    enabled: false            # 是否启用请求限速
+    requests_per_minute: 300  # 每分钟最大请求数
+
+
+# ============================================================
+# 日志和报告配置
+# ============================================================
+logging:
+  level: "INFO"               # 日志级别: DEBUG | INFO | WARNING | ERROR
+  log_file: "option_backtest.log"
+  console_output: true        # 是否输出到控制台
+
+
+# ============================================================
+# 输出配置
+# ============================================================
+output:
+  result_file: "option_backtest_result.json"
+  save_trades: true           # 是否保存交易明细
+  save_daily_stats: true      # 是否保存每日统计
+  save_position_history: true # 是否保存持仓历史
+
+
+# ============================================================
+# 高级选项
+# ============================================================
+advanced:
+  # 保证金设置
+  margin:
+    method: "simple"          # 保证金计算方法: "simple" | "reg_t" | "portfolio"
+    simple_margin_pct: 20.0   # 简化保证金（标的价值的百分比）
+  
+  # 滑点模型
+  slippage_model:
+    type: "percentage"        # 滑点模型: "percentage" | "dynamic"
+    dynamic:                  # 动态滑点（基于流动性）
+      enabled: false
+      base_slippage: 0.005
+      volume_factor: 0.0001   # 成交量影响因子
+  
+  # 回测模式
+  mode: "realistic"           # "realistic" | "optimistic" | "pessimistic"
+  
+  # 数据完整性检查
+  data_validation:
+    enabled: true
+    skip_missing_data: true   # 跳过数据缺失的交易
+    warn_on_gaps: true        # 数据间隙时发出警告
+
