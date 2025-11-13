@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-期权卖出回测脚本 - 支持完整配置文件
-Option Selling Backtest Runner with Full Configuration Support
+期权买入回测脚本 - 支持完整配置文件
+Option Buying Backtest Runner with Full Configuration Support
 """
 
 import sys
@@ -25,7 +25,7 @@ from market.option_backtest_client import OptionBacktestClient
 
 
 class OptionBacktestRunner:
-    """期权卖出回测运行器 - 支持完整配置"""
+    """期权买入回测运行器 - 支持完整配置"""
     
     def __init__(self, config: Dict):
         """
@@ -382,7 +382,7 @@ class OptionBacktestRunner:
     
     def run(self, start_date: Optional[date] = None, end_date: Optional[date] = None):
         """
-        运行期权卖出回测
+        运行期权买入回测
         
         Args:
             start_date: 回测开始日期（覆盖配置文件）
@@ -457,8 +457,8 @@ class OptionBacktestRunner:
             self.option_client.set_current_time(event_time)
             
             if event['type'] == 'SIGNAL':
-                # 处理信号：卖出期权
-                self._handle_sell_signal(event['data'])
+                # 处理信号：买入期权
+                self._handle_buy_signal(event['data'])
             
             # 每次事件后，检查是否需要平仓
             self._check_positions_for_close(event_time)
@@ -468,8 +468,8 @@ class OptionBacktestRunner:
         
         self.logger.info("✅ 回测完成！")
     
-    def _handle_sell_signal(self, signal: Dict):
-        """处理期权卖出信号"""
+    def _handle_buy_signal(self, signal: Dict):
+        """处理期权买入信号"""
         ticker = signal['ticker']
         strike = signal['strike']
         option_type = signal['option_type']
@@ -504,8 +504,8 @@ class OptionBacktestRunner:
             })
             return
         
-        # 卖出期权（开仓）
-        order = self.option_client.sell_option(
+        # 买入期权（开仓）✅ 改用 buy_option
+        order = self.option_client.buy_option(
             underlying=ticker,
             expiry=expiry,
             option_type=option_type,
@@ -515,14 +515,20 @@ class OptionBacktestRunner:
         )
         
         if order:
+            # 计算投入比例
+            account_value = self.option_client.get_account_info()['total_assets']
+            investment_pct = (order['debit_paid'] / account_value * 100) if account_value > 0 else 0
+            
             self.trade_records.append({
-                'type': 'SELL_TO_OPEN',
+                'type': 'BUY_TO_OPEN',  # ✅ 改为 BUY_TO_OPEN
                 'option_ticker': option_ticker,
                 'underlying': ticker,
                 'time': time_et.isoformat(),
                 'contracts': contracts,
                 'premium': order['premium'],
-                'credit_received': order['credit_received'],
+                'debit_paid': order['debit_paid'],  # ✅ 买入总金额
+                'investment_amount': order['debit_paid'],  # 投入金额
+                'investment_pct': round(investment_pct, 2),  # 投入比例
                 'strike': strike,
                 'expiry': expiry.isoformat(),
                 'option_type': option_type,
@@ -556,7 +562,7 @@ class OptionBacktestRunner:
             self.signal_records.append({
                 'ticker': ticker,
                 'time': time_et,
-                'decision': 'SELL',
+                'decision': 'BUY',  # ✅ 改为 BUY
                 'option_ticker': option_ticker,
                 'contracts': contracts,
             })
@@ -583,15 +589,17 @@ class OptionBacktestRunner:
         elif method == 'risk_based':
             risk_cfg = sizing_cfg['risk_based']
             account_value = self.option_client.get_account_info()['total_assets']
-            risk_amount = min(
+            # 计算投入金额（买入期权策略：直接用百分比作为投入金额）
+            position_amount = min(
                 account_value * risk_cfg['risk_per_trade_pct'] / 100,
                 risk_cfg['max_risk_per_trade']
             )
-            # 简化：假设最大风险 = 权利金 * 2（期权价格翻倍）
+            # 计算可以买入多少份合约
             premium = signal['spot']
             if premium > 0:
-                contracts = int(risk_amount / (premium * 100 * 2))
-                return max(1, contracts)
+                cost_per_contract = premium * 100  # 1份合约 = 100股
+                contracts = int(position_amount / cost_per_contract)
+                return max(1, contracts)  # 至少1份
             return 1
         
         elif method == 'kelly':
@@ -630,8 +638,10 @@ class OptionBacktestRunner:
                     positions_to_close.append((option_ticker, '到达目标持仓时间'))
                     continue
             
-            # 获取当前期权价格
-            current_premium = self.option_client.get_option_price_at_time(option_ticker, current_time)
+            # 获取当前期权价格（会自动向后查找）
+            current_premium = self.option_client.get_option_price_at_time(
+                option_ticker, current_time, search_forward_days=10
+            )
             
             if current_premium is None:
                 continue
@@ -640,8 +650,8 @@ class OptionBacktestRunner:
             if entry_premium is None:
                 continue
             
-            # 计算收益率
-            pnl_pct = (entry_premium - current_premium) / entry_premium * 100
+            # 计算收益率（买入策略：当前价格 - 买入价格）
+            pnl_pct = (current_premium - entry_premium) / entry_premium * 100
             
             # 收益止盈
             if exit_cfg['profit_target']['enabled']:
@@ -663,11 +673,13 @@ class OptionBacktestRunner:
     
     def _close_position(self, option_ticker: str, close_time: datetime, reason: str):
         """平仓期权持仓"""
-        # 获取当前期权价格
-        current_premium = self.option_client.get_option_price_at_time(option_ticker, close_time)
+        # 获取当前期权价格（会自动向后查找10天）
+        current_premium = self.option_client.get_option_price_at_time(
+            option_ticker, close_time, search_forward_days=10
+        )
         
         if current_premium is None:
-            self.logger.warning(f"⚠️  无法获取 {option_ticker} 在 {close_time} 的价格，使用$0.01平仓")
+            self.logger.warning(f"⚠️  无法获取 {option_ticker} 前后10天的价格，使用$0.01平仓")
             current_premium = 0.01
         
         # 获取持仓信息
@@ -679,8 +691,8 @@ class OptionBacktestRunner:
         
         contracts = abs(position['contracts'])
         
-        # 买入平仓
-        order = self.option_client.buy_to_close_option(
+        # 卖出平仓（买入策略）✅
+        order = self.option_client.sell_to_close_option(
             option_ticker=option_ticker,
             contracts=contracts,
             premium=current_premium
@@ -688,13 +700,13 @@ class OptionBacktestRunner:
         
         if order:
             self.trade_records.append({
-                'type': 'BUY_TO_CLOSE',
+                'type': 'SELL_TO_CLOSE',  # ✅ 改为 SELL_TO_CLOSE
                 'option_ticker': option_ticker,
                 'underlying': position['underlying'],
                 'time': close_time.isoformat(),
                 'contracts': contracts,
                 'premium': order['premium'],
-                'debit_paid': order['debit_paid'],
+                'credit_received': order['credit_received'],  # ✅ 改为 credit_received
                 'pnl': order['pnl'],
                 'pnl_ratio': order['pnl_ratio'],
                 'reason': reason,
@@ -729,7 +741,8 @@ class OptionBacktestRunner:
             
             contracts = abs(pos['contracts'])
             
-            order = self.option_client.buy_to_close_option(
+            # 卖出平仓（买入策略）✅
+            order = self.option_client.sell_to_close_option(
                 option_ticker=option_ticker,
                 contracts=contracts,
                 premium=current_premium
@@ -737,13 +750,13 @@ class OptionBacktestRunner:
             
             if order:
                 self.trade_records.append({
-                    'type': 'BUY_TO_CLOSE',
+                    'type': 'SELL_TO_CLOSE',  # ✅ 改为 SELL_TO_CLOSE
                     'option_ticker': option_ticker,
                     'underlying': pos['underlying'],
                     'time': current_time.isoformat(),
                     'contracts': contracts,
                     'premium': order['premium'],
-                    'debit_paid': order['debit_paid'],
+                    'credit_received': order['credit_received'],  # ✅ 改为 credit_received
                     'pnl': order['pnl'],
                     'pnl_ratio': order['pnl_ratio'],
                     'reason': '回测结束',
@@ -757,11 +770,12 @@ class OptionBacktestRunner:
         summary = self.option_client.get_summary()
         
         total_signals = len(self.signal_records)
-        sell_signals = len([s for s in self.signal_records if s['decision'] == 'SELL'])
-        skip_signals = total_signals - sell_signals
+        buy_signals = len([s for s in self.signal_records if s['decision'] == 'BUY'])  # ✅ 改为 BUY
+        skip_signals = total_signals - buy_signals
         
         # 统计交易结果
-        close_trades = [t for t in self.trade_records if t['type'] == 'BUY_TO_CLOSE']
+        buy_open_trades = [t for t in self.trade_records if t['type'] == 'BUY_TO_OPEN']
+        close_trades = [t for t in self.trade_records if t['type'] == 'SELL_TO_CLOSE']  # ✅ 改为 SELL_TO_CLOSE
         winning_trades = [t for t in close_trades if t.get('pnl', 0) > 0]
         losing_trades = [t for t in close_trades if t.get('pnl', 0) < 0]
         
@@ -769,6 +783,17 @@ class OptionBacktestRunner:
         
         avg_win = sum(t['pnl'] for t in winning_trades) / len(winning_trades) if winning_trades else 0
         avg_loss = sum(t['pnl'] for t in losing_trades) / len(losing_trades) if losing_trades else 0
+        
+        # 计算买入和卖出总金额
+        total_buy_amount = sum(t.get('debit_paid', 0) for t in buy_open_trades)
+        total_sell_amount = sum(t.get('credit_received', 0) for t in close_trades)
+        
+        # 计算最大回撤和其他指标
+        max_pnl = max([t.get('pnl', 0) for t in close_trades]) if close_trades else 0
+        min_pnl = min([t.get('pnl', 0) for t in close_trades]) if close_trades else 0
+        
+        # 计算盈亏比
+        profit_factor = abs(avg_win * len(winning_trades) / (avg_loss * len(losing_trades))) if losing_trades and avg_loss != 0 else 0
         
         return {
             '=== 账户概况 ===': {
@@ -781,11 +806,16 @@ class OptionBacktestRunner:
             },
             '=== 交易统计 ===': {
                 '总信号数': total_signals,
-                '卖出期权数': sell_signals,
+                '买入期权数': buy_signals,
                 '跳过信号数': skip_signals,
                 '平仓交易数': len(close_trades),
                 '当前持仓数': summary['num_positions'],
-                '收取权利金总额': f"${summary['total_premium_received']:,.2f}"
+                '支付权利金总额': f"${summary.get('total_premium_paid', 0):,.2f}"
+            },
+            '=== 资金流水 ===': {
+                '买入总金额': f"${total_buy_amount:,.2f}",
+                '卖出总金额': f"${total_sell_amount:,.2f}",
+                '净现金流': f"${total_sell_amount - total_buy_amount:+,.2f}"
             },
             '=== 盈亏分析 ===': {
                 '已实现盈亏': f"${summary['realized_pnl']:+,.2f}",
@@ -795,6 +825,9 @@ class OptionBacktestRunner:
                 '亏损交易数': len(losing_trades),
                 '平均盈利': f"${avg_win:+,.2f}",
                 '平均亏损': f"${avg_loss:+,.2f}",
+                '最大单笔盈利': f"${max_pnl:+,.2f}",
+                '最大单笔亏损': f"${min_pnl:+,.2f}",
+                '盈亏比': f"{profit_factor:.2f}" if profit_factor > 0 else "N/A"
             }
         }
     
@@ -803,7 +836,7 @@ class OptionBacktestRunner:
         report = self.generate_report()
         
         print("\n" + "="*60)
-        print("期权卖出回测报告")
+        print("期权买入回测报告")  # ✅ 改为买入
         print("="*60)
         
         for section, data in report.items():
@@ -813,9 +846,94 @@ class OptionBacktestRunner:
         
         print("\n" + "="*60)
     
+    def print_return_summary(self):
+        """打印收益率详细总结"""
+        summary = self.option_client.get_summary()
+        close_trades = [t for t in self.trade_records if t['type'] == 'SELL_TO_CLOSE']
+        
+        if not close_trades:
+            return
+        
+        # 按时间排序
+        close_trades_sorted = sorted(close_trades, key=lambda x: x['time'])
+        
+        # 计算各种收益率指标
+        total_return = summary['total_pnl_ratio'] * 100
+        
+        # 计算年化收益率
+        if close_trades_sorted:
+            start_time = datetime.fromisoformat(close_trades_sorted[0]['time'])
+            end_time = datetime.fromisoformat(close_trades_sorted[-1]['time'])
+            days = (end_time - start_time).days
+            if days > 0:
+                # 使用正确的年化公式：(1 + return) ^ (365/days) - 1
+                annualized_return = ((1 + summary['total_pnl_ratio']) ** (365.25 / days) - 1) * 100
+            else:
+                annualized_return = 0
+        else:
+            annualized_return = 0
+            days = 0
+        
+        # 计算最大回撤
+        equity_curve = [summary['initial_cash']]
+        running_pnl = 0
+        for trade in close_trades_sorted:
+            running_pnl += trade.get('pnl', 0)
+            equity_curve.append(summary['initial_cash'] + running_pnl)
+        
+        max_drawdown = 0
+        peak = equity_curve[0]
+        for equity in equity_curve:
+            if equity > peak:
+                peak = equity
+            drawdown = (peak - equity) / peak * 100
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+        
+        # 打印总结
+        print("\n" + "="*60)
+        print("📊 收益率详细总结")
+        print("="*60)
+        print(f"\n📈 收益率指标:")
+        print(f"  总收益率: {total_return:+.2f}%")
+        print(f"  年化收益率: {annualized_return:+.2f}%")
+        print(f"  交易天数: {days} 天")
+        print(f"  最大回撤: {max_drawdown:.2f}%")
+        
+        print(f"\n💰 资金变化:")
+        print(f"  初始资金: ${summary['initial_cash']:,.2f}")
+        print(f"  最终资金: ${summary['total_assets']:,.2f}")
+        print(f"  绝对收益: ${summary['total_pnl']:+,.2f}")
+        
+        print(f"\n📋 交易表现:")
+        winning_trades = [t for t in close_trades if t.get('pnl', 0) > 0]
+        losing_trades = [t for t in close_trades if t.get('pnl', 0) < 0]
+        win_rate = len(winning_trades) / len(close_trades) * 100 if close_trades else 0
+        
+        avg_win = sum(t['pnl'] for t in winning_trades) / len(winning_trades) if winning_trades else 0
+        avg_loss = sum(t['pnl'] for t in losing_trades) / len(losing_trades) if losing_trades else 0
+        profit_factor = abs(avg_win * len(winning_trades) / (avg_loss * len(losing_trades))) if losing_trades and avg_loss != 0 else 0
+        
+        print(f"  胜率: {win_rate:.1f}%")
+        print(f"  盈利交易: {len(winning_trades)} 笔")
+        print(f"  亏损交易: {len(losing_trades)} 笔")
+        print(f"  平均盈利: ${avg_win:+,.2f}")
+        print(f"  平均亏损: ${avg_loss:+,.2f}")
+        print(f"  盈亏比: {profit_factor:.2f}" if profit_factor > 0 else "  盈亏比: N/A")
+        
+        print("\n" + "="*60)
+    
     def save_report(self, filename: str):
         """保存报告到JSON"""
         report = self.generate_report()
+        summary = self.option_client.get_summary()
+        
+        # 计算买入和卖出总金额（用于JSON）
+        buy_open_trades = [t for t in self.trade_records if t['type'] == 'BUY_TO_OPEN']
+        close_trades = [t for t in self.trade_records if t['type'] == 'SELL_TO_CLOSE']
+        
+        total_buy_amount = sum(t.get('debit_paid', 0) for t in buy_open_trades)
+        total_sell_amount = sum(t.get('credit_received', 0) for t in close_trades)
         
         output = {
             'backtest_time': datetime.now().isoformat(),
@@ -823,6 +941,20 @@ class OptionBacktestRunner:
             'csv_file': str(self.csv_file),
             'initial_cash': self.initial_cash,
             'report': report,
+            'summary': {
+                'initial_cash': summary['initial_cash'],
+                'final_cash': summary['cash'],
+                'total_assets': summary['total_assets'],
+                'total_pnl': summary['total_pnl'],
+                'total_pnl_pct': summary['total_pnl_ratio'] * 100,
+                'realized_pnl': summary['realized_pnl'],
+                'unrealized_pnl': summary['unrealized_pnl'],
+                'total_buy_amount': total_buy_amount,
+                'total_sell_amount': total_sell_amount,
+                'net_cashflow': total_sell_amount - total_buy_amount,
+                'num_trades': len(buy_open_trades),
+                'num_closed': len(close_trades),
+            },
             'trades': self.trade_records if self.config['output']['save_trades'] else [],
             'api_stats': {
                 'api_calls': self.option_client.api_calls,
@@ -840,7 +972,7 @@ def main():
     """主函数"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='期权卖出回测 - 支持完整配置文件')
+    parser = argparse.ArgumentParser(description='期权买入回测 - 支持完整配置文件')
     parser.add_argument('--config', '-c', default='config_option.yaml', help='配置文件路径')
     parser.add_argument('--start-date', type=str, default=None, help='开始日期（覆盖配置文件）')
     parser.add_argument('--end-date', type=str, default=None, help='结束日期（覆盖配置文件）')
@@ -849,7 +981,7 @@ def main():
     
     # 加载配置
     print("\n" + "="*60)
-    print("期权卖出回测系统")
+    print("期权买入回测系统")
     print("="*60)
     print(f"📂 配置文件: {args.config}\n")
     
@@ -863,18 +995,39 @@ def main():
         print(f"❌ 配置文件加载失败: {e}")
         return
     
-    # 配置日志
+    # 配置日志 - 每次运行创建新日志文件
     log_cfg = config['logging']
+    log_file_base = log_cfg['log_file']
+    
+    # 生成带时间戳的日志文件名
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file_name = Path(log_file_base).stem
+    log_file_ext = Path(log_file_base).suffix
+    log_file = f"{log_file_name}_{timestamp}{log_file_ext}"
+    
+    # 创建日志处理器
+    handlers = [
+        logging.FileHandler(log_file, mode='w', encoding='utf-8')  # 写入模式（新文件）
+    ]
+    if log_cfg['console_output']:
+        handlers.append(logging.StreamHandler())
+    
     logging.basicConfig(
         level=getattr(logging, log_cfg['level']),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_cfg['log_file']),
-            logging.StreamHandler() if log_cfg['console_output'] else logging.NullHandler()
-        ]
+        handlers=handlers,
+        force=True  # 强制重新配置
     )
     
     logger = logging.getLogger(__name__)
+    
+    # 提示日志文件位置
+    print(f"📝 日志文件: {log_file}")
+    print(f"📊 日志级别: {log_cfg['level']}\n")
+    logger.info("="*60)
+    logger.info("期权买入回测系统启动")
+    logger.info(f"运行时间: {timestamp}")
+    logger.info("="*60)
     
     # 创建运行器
     runner = OptionBacktestRunner(config)
@@ -908,11 +1061,26 @@ def main():
     # 打印报告
     runner.print_report()
     
+    # 打印收益率详细总结
+    runner.print_return_summary()
+    
     # 保存报告
     output_file = config['output']['result_file']
     runner.save_report(output_file)
     
-    print(f"\n✅ 回测完成！报告已保存到: {output_file}\n")
+    # 输出文件位置提示
+    print("\n" + "="*60)
+    print("📁 输出文件")
+    print("="*60)
+    print(f"  JSON报告: {output_file}")
+    print(f"  日志文件: {log_file}")
+    print("="*60)
+    
+    print(f"\n✅ 回测完成！耗时 {duration:.1f} 秒\n")
+    
+    logger.info("="*60)
+    logger.info(f"回测完成！JSON报告: {output_file}")
+    logger.info("="*60)
 
 
 if __name__ == '__main__':

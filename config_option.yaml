@@ -1,17 +1,17 @@
-# Option Selling Backtest Configuration
-# 期权卖出回测配置文件
+# Option Buying Backtest Configuration
+# 期权买入回测配置文件（买入看涨期权，等待升值后卖出获利）
 
 # ============================================================
 # 回测基础设置
 # ============================================================
 backtest:
-  initial_cash: 1000000.0  # 初始资金（美元）
+  initial_cash: 100000.0    # 初始资金（美元）- 修改为10万
   start_date: "2024-01-01"  # 回测开始日期 (YYYY-MM-DD)，null = CSV最早日期
   end_date: "2025-10-01"    # 回测结束日期 (YYYY-MM-DD)，null = CSV最晚日期
   
   # 持仓管理
   hold_days: 5              # 持仓天数（默认5天后平仓）
-  max_positions: 20         # 最大同时持仓数
+  max_positions: 5          # 最大同时持仓数（修改为5，每个仓位20%）
   
   # 交易延迟（模拟真实交易场景）
   signal_delay_minutes: 10  # 信号延迟（分钟），默认10分钟
@@ -141,7 +141,7 @@ filters:
 # 仓位管理
 # ============================================================
 position_sizing:
-  method: "fixed"             # 仓位计算方法: "fixed" | "risk_based" | "kelly"
+  method: "risk_based"        # 仓位计算方法: "fixed" | "risk_based" | "kelly" - 改为risk_based
   
   # 固定仓位（method = "fixed"）
   fixed:
@@ -149,8 +149,8 @@ position_sizing:
   
   # 基于风险的仓位（method = "risk_based"）
   risk_based:
-    risk_per_trade_pct: 2.0   # 每次交易风险占总资产的百分比
-    max_risk_per_trade: 5000  # 每次交易最大风险金额（美元）
+    risk_per_trade_pct: 20.0  # 每次交易投入总资产的20%（10万*20%=2万）
+    max_risk_per_trade: 20000 # 每次交易最大投入金额（2万美元）
   
   # Kelly准则仓位（method = "kelly"）
   kelly:
@@ -177,7 +177,7 @@ exit_rules:
   # 止损
   stop_loss:
     enabled: true
-    loss_pct: 20.0           # 亏损达到100%时止损（期权价格翻倍）
+    loss_pct: 30.0           # 亏损达到30%时止损（买入期权策略建议20-30%）
   
   # Delta止损（期权接近实值）
   delta_stop:
